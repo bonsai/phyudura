@@ -1,0 +1,162 @@
+{
+  "nodes": [
+    {
+      "id": "node-0",
+      "name": "osc",
+      "x": 100,
+      "y": 250,
+      "params": {
+        "freq": 10,
+        "sync": 0.1,
+        "offset": 0.5
+      }
+    },
+    {
+      "id": "node-1",
+      "name": "kaleid",
+      "x": 308,
+      "y": 124,
+      "params": {
+        "sides": 4
+      }
+    },
+    {
+      "id": "node-2",
+      "name": "out",
+      "x": 632,
+      "y": 564,
+      "params": {}
+    },
+    {
+      "id": "node-3",
+      "name": "voronoi",
+      "x": 650,
+      "y": 184,
+      "params": {
+        "scale": 34.5,
+        "speed": 0.1,
+        "blending": 0.3
+      }
+    },
+    {
+      "id": "node-4",
+      "name": "modulate",
+      "x": 519,
+      "y": 366,
+      "params": {
+        "amount": 0.5
+      }
+    },
+    {
+      "id": "node-5",
+      "name": "noise",
+      "x": 438,
+      "y": 9,
+      "params": {
+        "scale": 25.9,
+        "speed": 0
+      }
+    },
+    {
+      "id": "node-6",
+      "name": "color",
+      "x": 446,
+      "y": 211,
+      "params": {
+        "r": 1,
+        "g": -0.01,
+        "b": 2
+      }
+    },
+    {
+      "id": "node-7",
+      "name": "modulate",
+      "x": 633,
+      "y": 388,
+      "params": {
+        "amount": 0.5
+      }
+    },
+    {
+      "id": "node-8",
+      "name": "gradient",
+      "x": 650,
+      "y": 319,
+      "params": {
+        "speed": 0
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": {
+        "nodeId": "node-0",
+        "outletIndex": 0
+      },
+      "to": {
+        "nodeId": "node-1",
+        "inletIndex": 0
+      }
+    },
+    {
+      "from": {
+        "nodeId": "node-6",
+        "outletIndex": 0
+      },
+      "to": {
+        "nodeId": "node-4",
+        "inletIndex": 0
+      }
+    },
+    {
+      "from": {
+        "nodeId": "node-5",
+        "outletIndex": 0
+      },
+      "to": {
+        "nodeId": "node-6",
+        "inletIndex": 0
+      }
+    },
+    {
+      "from": {
+        "nodeId": "node-1",
+        "outletIndex": 0
+      },
+      "to": {
+        "nodeId": "node-4",
+        "inletIndex": 1
+      }
+    },
+    {
+      "from": {
+        "nodeId": "node-3",
+        "outletIndex": 0
+      },
+      "to": {
+        "nodeId": "node-7",
+        "inletIndex": 1
+      }
+    },
+    {
+      "from": {
+        "nodeId": "node-4",
+        "outletIndex": 0
+      },
+      "to": {
+        "nodeId": "node-7",
+        "inletIndex": 0
+      }
+    },
+    {
+      "from": {
+        "nodeId": "node-7",
+        "outletIndex": 0
+      },
+      "to": {
+        "nodeId": "node-2",
+        "inletIndex": 0
+      }
+    }
+  ]
+}

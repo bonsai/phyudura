@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hydra PD - Web GUI (Timestamped I/O)</title>
+    <script src="https://unpkg.com/hydra-synth"></script>
+    <style>
+        body {
+            font-family: monospace, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #282828;
+            color: #f0f0f0;
+            overflow: hidden;
+            user-select: none;
+        }
+        #hydra-canvas {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1;
+        }
+        #controls {
+            position: fixed; top: 10px; left: 10px; background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px; border: 1px solid #555; border-radius: 5px; z-index: 1000;
+            display: flex; align-items: center;
+        }
+        #controls select, #controls button {
+            background-color: #444; color: #eee; border: 1px solid #666;
+            padding: 5px; margin-right: 5px;
+        }
+        .io-button {
+            font-size: 1.2em; cursor: pointer; padding: 0 8px;
+        }
+        #pd-container {
+            position: relative; width: 100vw; height: 100vh;
+        }
+        .pd-node {
+            position: absolute; background-color: #e0e0e0; color: #000;
+            border: 1px solid #000; min-width: 60px; cursor: grab; z-index: 100;
+        }
+        .pd-node.dragging { cursor: grabbing; z-index: 200; }
+        .pd-node-title {
+            background-color: #c0c0c0; padding: 2px 5px; font-weight: bold;
+            border-bottom: 1px solid #000; white-space: nowrap;
+        }
+        .pd-node-content { padding: 5px; display: flex; gap: 10px; }
+        .pd-param-container {
+            display: flex; flex-direction: column; align-items: center; font-size: 12px;
+        }
+        .pd-param-value {
+            margin-top: 4px; background: #fff; padding: 1px 3px;
+            border: 1px solid #999; min-width: 30px; text-align: center;
+        }
+        input[type=range][orient=vertical] {
+            writing-mode: bt-lr; -webkit-appearance: slider-vertical;
+            width: 8px; height: 75px; padding: 0 5px; cursor: ns-resize;
+        }
+        .pd-inlet, .pd-outlet {
+            position: absolute; width: 15px; height: 10px;
+            background-color: #000; border: 1px solid #ccc; cursor: pointer;
+        }
+        .pd-inlet { top: -11px; }
+        .pd-inlet:hover { background-color: #33aaff; }
+        .pd-outlet { bottom: -11px; }
+        .pd-outlet:hover { background-color: #ffaa33; }
+        #pd-wires {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 99;
+        }
+        .wire { stroke: #ffaa33; stroke-width: 2; fill: none; }
+    </style>
+</head>
+<body>
+    <canvas id="hydra-canvas"></canvas>
+
+    <div id="controls">
+        <button id="export-btn" class="io-button" title="Export Patch (💾)">💾</button>
+        <button id="import-btn" class="io-button" title="Import Patch (📂)">📂</button>
+        <input type="file" id="import-file-input" accept=".json" style="display: none;">
+        <span style="border-left: 1px solid #666; margin: 0 8px; height: 20px;"></span>
+        <select id="add-node-select">
+            <option value="osc">osc</option>
+            <option value="voronoi">voronoi</option>
+            <option value="noise">noise</option>
+            <option value="gradient">gradient</option>
+            <option value="solid">solid</option>
+            <option value="shape">shape</option>
+            <option value="---" disabled>---</option>
+            <option value="kaleid">kaleid</option>
+            <option value="rotate">rotate</option>
+            <option value="scale">scale</option>
+            <option value="pixelate">pixelate</option>
+            <option value="color">color</option>
+            <option value="saturate">saturate</option>
+            <option value="---" disabled>---</option>
+            <option value="modulate">modulate</option>
+            <option value="blend">blend</option>
+            <option value="diff">diff</option>
+            <option value="---" disabled>---</option>
+            <option value="out">out</option>
+        </select>
+        <button id="add-node-btn">Add</button>
+    </div>
+
+    <div id="pd-container"></div>
+    <svg id="pd-wires"></svg>
+
+    <script>
+    window.addEventListener('load', () => {
+        // (省略: 初期化、状態管理、ノード定義、ノード作成などは前バージョンから変更ありません)
+        const hydra = new Hydra({ canvas: document.getElementById('hydra-canvas'), detectAudio: false, width: window.innerWidth, height: window.innerHeight });
+        window.addEventListener('resize', () => hydra.setResolution(window.innerWidth, window.innerHeight));
+        const pdContainer = document.getElementById('pd-container');
+        const wiresSvg = document.getElementById('pd-wires');
+        let nodes = {};
+        let connections = [];
+        let nodeIdCounter = 0;
+        let state = { draggingNode: null, dragOffset: { x: 0, y: 0 }, wiring: false, wireStartNode: null, wireStartOutlet: null, tempWire: null };
+        const NODE_DEFINITIONS = {};
+        const nodeDefs = {osc:{type:"source",inlets:0,outlets:1,params:[{name:"freq",def:10,min:0,max:100,step:.1},{name:"sync",def:.1,min:-1,max:1,step:.01},{name:"offset",def:.5,min:0,max:1,step:.01}]},voronoi:{type:"source",inlets:0,outlets:1,params:[{name:"scale",def:5,min:1,max:50,step:.1},{name:"speed",def:.1,min:0,max:1,step:.01},{name:"blending",def:.3,min:0,max:1,step:.01}]},noise:{type:"source",inlets:0,outlets:1,params:[{name:"scale",def:10,min:1,max:50,step:.1},{name:"speed",def:.1,min:0,max:1,step:.01}]},gradient:{type:"source",inlets:0,outlets:1,params:[{name:"speed",def:0,min:-5,max:5,step:.1}]},solid:{type:"source",inlets:0,outlets:1,params:[{name:"r",def:1,min:0,max:1,step:.01},{name:"g",def:0,min:0,max:1,step:.01},{name:"b",def:0,min:0,max:1,step:.01},{name:"a",def:1,min:0,max:1,step:.01}]},shape:{type:"source",inlets:0,outlets:1,params:[{name:"sides",def:3,min:2,max:20,step:1},{name:"radius",def:.5,min:0,max:2,step:.01},{name:"smoothing",def:.01,min:0,max:.5,step:.001}]},kaleid:{type:"filter",inlets:1,outlets:1,params:[{name:"sides",def:4,min:2,max:50,step:1}]},rotate:{type:"filter",inlets:1,outlets:1,params:[{name:"angle",def:.5,min:-6.28,max:6.28,step:.01},{name:"speed",def:.1,min:-2,max:2,step:.01}]},scale:{type:"filter",inlets:1,outlets:1,params:[{name:"size",def:1.5,min:.1,max:10,step:.01}]},pixelate:{type:"filter",inlets:1,outlets:1,params:[{name:"x",def:20,min:1,max:200,step:1},{name:"y",def:20,min:1,max:200,step:1}]},color:{type:"filter",inlets:1,outlets:1,params:[{name:"r",def:1,min:-2,max:2,step:.01},{name:"g",def:1,min:-2,max:2,step:.01},{name:"b",def:1,min:-2,max:2,step:.01}]},saturate:{type:"filter",inlets:1,outlets:1,params:[{name:"amount",def:2,min:0,max:10,step:.1}]},modulate:{type:"combiner",inlets:2,outlets:1,params:[{name:"amount",def:.5,min:0,max:10,step:.1}]},blend:{type:"combiner",inlets:2,outlets:1,params:[{name:"amount",def:.5,min:0,max:1,step:.01}]},diff:{type:"combiner",inlets:2,outlets:1,params:[]},out:{type:"output",inlets:1,outlets:0,params:[]}};
+        Object.assign(NODE_DEFINITIONS, nodeDefs);
+        
+        // --- ノード作成関数 (変更なし) ---
+        function createNode(name, x, y, idOverride = null, paramsOverride = null) {
+            const id = idOverride || `node-${nodeIdCounter++}`;
+            if (idOverride) {
+                const numericId = parseInt(idOverride.split('-')[1]);
+                if (numericId >= nodeIdCounter) nodeIdCounter = numericId + 1;
+            }
+            const definition = NODE_DEFINITIONS[name]; if (!definition) return null;
+            const nodeEl = document.createElement('div'); nodeEl.className = 'pd-node'; nodeEl.id = id; nodeEl.style.left = `${x}px`; nodeEl.style.top = `${y}px`;
+            const titleEl = document.createElement('div'); titleEl.className = 'pd-node-title'; titleEl.textContent = name; nodeEl.appendChild(titleEl);
+            nodeEl.addEventListener('contextmenu', (e) => { e.preventDefault(); deleteNode(id); });
+            const contentEl = document.createElement('div'); contentEl.className = 'pd-node-content';
+            const params = {}; const paramInputs = {};
+            if (definition.params.length > 0) {
+                definition.params.forEach(p => {
+                    const paramContainer = document.createElement('div'); paramContainer.className = 'pd-param-container';
+                    const label = document.createElement('label'); label.textContent = p.name;
+                    const slider = document.createElement('input'); slider.type = 'range'; slider.setAttribute('orient', 'vertical');
+                    const valueDisplay = document.createElement('span'); valueDisplay.className = 'pd-param-value';
+                    const initialValue = (paramsOverride && paramsOverride[p.name] !== undefined) ? paramsOverride[p.name] : p.def;
+                    slider.min = p.min; slider.max = p.max; slider.step = p.step; slider.value = initialValue;
+                    valueDisplay.textContent = Number(initialValue).toFixed(p.step < 0.1 ? 2 : 1);
+                    paramContainer.appendChild(label); paramContainer.appendChild(slider); paramContainer.appendChild(valueDisplay);
+                    contentEl.appendChild(paramContainer);
+                    params[p.name] = initialValue; paramInputs[p.name] = slider;
+                    slider.addEventListener('input', () => {
+                        const val = parseFloat(slider.value);
+                        nodes[id].params[p.name] = val;
+                        valueDisplay.textContent = val.toFixed(p.step < 0.1 ? 2 : 1);
+                        compileAndRun();
+                    });
+                });
+            }
+            nodeEl.appendChild(contentEl);
+            const inlets = [], outlets = [];
+            for (let i = 0; i < definition.inlets; i++) { const inletEl = document.createElement('div'); inletEl.className = 'pd-inlet'; inletEl.style.left = `${10 + i * 20}px`; inletEl.dataset.nodeId = id; inletEl.dataset.inletIndex = i; nodeEl.appendChild(inletEl); inlets.push(inletEl); }
+            for (let i = 0; i < definition.outlets; i++) { const outletEl = document.createElement('div'); outletEl.className = 'pd-outlet'; outletEl.style.left = `${10 + i * 20}px`; outletEl.dataset.nodeId = id; outletEl.dataset.outletIndex = i; nodeEl.appendChild(outletEl); outlets.push(outletEl); }
+            pdContainer.appendChild(nodeEl);
+            nodes[id] = { id, name, el: nodeEl, x, y, definition, params, paramInputs, inlets, outlets };
+            makeDraggable(nodeEl);
+            return id;
+        }
+
+        // --- エクスポート機能 (★ここが変更点) ---
+        function handleExport() {
+            const patchData = {
+                nodes: Object.values(nodes).map(node => ({
+                    id: node.id, name: node.name, x: node.x, y: node.y, params: node.params
+                })),
+                connections: connections
+            };
+            const jsonString = JSON.stringify(patchData, null, 2);
+            const blob = new Blob([jsonString], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+
+            // タイムスタンプを生成 (例: 20231027_112233)
+            const now = new Date();
+            const timestamp = now.getFullYear().toString() +
+                              String(now.getMonth() + 1).padStart(2, '0') +
+                              String(now.getDate()).padStart(2, '0') + '_' +
+                              String(now.getHours()).padStart(2, '0') +
+                              String(now.getMinutes()).padStart(2, '0') +
+                              String(now.getSeconds()).padStart(2, '0');
+
+            a.download = `hydra-patch_${timestamp}.json`; // タイムスタンプ付きのファイル名
+            
+            a.click();
+            URL.revokeObjectURL(url);
+            a.remove();
+        }
+        
+        // (省略: handleImport, loadPatch, clearPatch など、その他の関数は変更ありません)
+        function deleteNode(id) { if (!nodes[id]) return; connections = connections.filter(c => c.from.nodeId !== id && c.to.nodeId !== id); nodes[id].el.remove(); delete nodes[id]; redrawWires(); compileAndRun(); }
+        function handleImport(event) { const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (e) => { try { const patchData = JSON.parse(e.target.result); loadPatch(patchData); } catch (err) { alert('Error parsing JSON file.'); console.error(err); } }; reader.readAsText(file); event.target.value = ''; }
+        function loadPatch(patchData) { clearPatch(); patchData.nodes.forEach(nodeData => { createNode(nodeData.name, nodeData.x, nodeData.y, nodeData.id, nodeData.params); }); connections = patchData.connections || []; redrawWires(); compileAndRun(); }
+        function clearPatch() { Object.keys(nodes).forEach(id => nodes[id].el.remove()); nodes = {}; connections = []; nodeIdCounter = 0; redrawWires(); }
+        function makeDraggable(el) {const title = el.querySelector('.pd-node-title'); title.addEventListener('mousedown', (e) => {if (e.button !== 0) return; state.draggingNode = el; el.classList.add('dragging'); const rect = el.getBoundingClientRect(); state.dragOffset = { x: e.clientX - rect.left, y: e.clientY - rect.top };});}
+        window.addEventListener('mousemove', (e) => {if (state.draggingNode) {const id = state.draggingNode.id; nodes[id].x = e.clientX - state.dragOffset.x; nodes[id].y = e.clientY - state.dragOffset.y; state.draggingNode.style.left = `${nodes[id].x}px`; state.draggingNode.style.top = `${nodes[id].y}px`; redrawWires();} if (state.wiring) {const startRect = state.wireStartOutlet.getBoundingClientRect(); const startX = startRect.left + startRect.width / 2; const startY = startRect.top + startRect.height / 2; const endX = e.clientX; const endY = e.clientY; state.tempWire.setAttribute('d', `M ${startX} ${startY} C ${startX} ${startY + 50}, ${endX} ${endY - 50}, ${endX} ${endY}`);}});
+        window.addEventListener('mouseup', () => {if (state.draggingNode) {state.draggingNode.classList.remove('dragging'); state.draggingNode = null;} if (state.wiring) {state.wiring = false; state.tempWire.remove(); state.tempWire = null;}});
+        pdContainer.addEventListener('mousedown', (e) => {if (e.target.classList.contains('pd-outlet')) {e.stopPropagation(); state.wiring = true; state.wireStartNode = e.target.dataset.nodeId; state.wireStartOutlet = e.target; state.tempWire = document.createElementNS('http://www.w3.org/2000/svg', 'path'); state.tempWire.setAttribute('class', 'wire'); wiresSvg.appendChild(state.tempWire);}});
+        pdContainer.addEventListener('mouseup', (e) => {if (state.wiring && e.target.classList.contains('pd-inlet')) {const toNodeId = e.target.dataset.nodeId; const toInletIndex = parseInt(e.target.dataset.inletIndex); connections = connections.filter(c => !(c.to.nodeId === toNodeId && c.to.inletIndex === toInletIndex)); connections.push({from: { nodeId: state.wireStartNode, outletIndex: 0 }, to: { nodeId: toNodeId, inletIndex: toInletIndex }}); redrawWires(); compileAndRun();}});
+        wiresSvg.addEventListener('contextmenu', (e) => {e.preventDefault(); if (e.target.tagName === 'path') {const connId = e.target.dataset.connId; if (connId) {connections.splice(parseInt(connId), 1); redrawWires(); compileAndRun();}}});
+        function getPortPosition(nodeId, portType, portIndex) {const node = nodes[nodeId]; if (!node) return null; const portEl = (portType === 'inlet') ? node.inlets[portIndex] : node.outlets[portIndex]; if (!portEl) return null; const rect = portEl.getBoundingClientRect(); return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};}
+        function redrawWires() {wiresSvg.innerHTML = ''; connections.forEach((conn, index) => {const startPos = getPortPosition(conn.from.nodeId, 'outlet', conn.from.outletIndex); const endPos = getPortPosition(conn.to.nodeId, 'inlet', conn.to.inletIndex); if (startPos && endPos) {const path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('class', 'wire'); path.setAttribute('d', `M ${startPos.x} ${startPos.y} C ${startPos.x} ${startPos.y + 50}, ${endPos.x} ${endPos.y - 50}, ${endPos.x} ${endPos.y}`); path.dataset.connId = index; wiresSvg.appendChild(path);}});}
+        let hydraCodeCache = {}; function generateCodeForNode(nodeId) {if (hydraCodeCache[nodeId]) return hydraCodeCache[nodeId]; const node = nodes[nodeId]; if (!node) return 'solid(1,0,1)'; const def = node.definition; const params = Object.values(node.params).join(', '); let code = ''; if (def.type === 'source') {code = `${node.name}(${params})`;} else if (def.type === 'filter') {const inputConn = connections.find(c => c.to.nodeId === nodeId); const inputCode = inputConn ? generateCodeForNode(inputConn.from.nodeId) : 'solid(0,0,0)'; code = `(${inputCode}).${node.name}(${params})`;} else if (def.type === 'combiner') {const inputConn1 = connections.find(c => c.to.nodeId === nodeId && c.to.inletIndex === 0); const inputConn2 = connections.find(c => c.to.nodeId === nodeId && c.to.inletIndex === 1); const inputCode1 = inputConn1 ? generateCodeForNode(inputConn1.from.nodeId) : 'solid(0,0,0)'; const inputCode2 = inputConn2 ? generateCodeForNode(inputConn2.from.nodeId) : 'solid(0,0,0)'; const secondArg = (node.name === 'modulate' || node.name === 'blend') ? `, ${params}` : ''; code = `(${inputCode1}).${node.name}(${inputCode2}${secondArg})`;} else if (def.type === 'output') {const inputConn = connections.find(c => c.to.nodeId === nodeId); const inputCode = inputConn ? generateCodeForNode(inputConn.from.nodeId) : 'solid(0,0,0)'; code = `(${inputCode}).out()`;} hydraCodeCache[nodeId] = code; return code;}
+        let lastRunTime = 0, scheduledRun = null; function compileAndRun() {const now = Date.now(); if (now - lastRunTime > 33) {if (scheduledRun) clearTimeout(scheduledRun); _execute(); lastRunTime = now;} else {if (!scheduledRun) {scheduledRun = setTimeout(() => {_execute(); scheduledRun = null; lastRunTime = Date.now();}, 33);}}}
+        function _execute() {hydraCodeCache = {}; const outNodes = Object.values(nodes).filter(n => n.name === 'out'); const finalCode = outNodes.length > 0 ? generateCodeForNode(outNodes[0].id) : 'solid(0,0,0).out()'; try {eval(finalCode);} catch (e) {console.error("Hydra execution error:", e, "\nFailed code:", finalCode);}}
+        
+        // --- UIイベントリスナー設定 ---
+        document.getElementById('add-node-btn').addEventListener('click', () => {
+            const nodeName = document.getElementById('add-node-select').value;
+            const x = window.innerWidth / 2 - 50 + (Object.keys(nodes).length % 10 - 5) * 20;
+            const y = window.innerHeight / 2 - 40 + (Object.keys(nodes).length % 10 - 5) * 20;
+            createNode(nodeName, x, y);
+        });
+        document.getElementById('export-btn').addEventListener('click', handleExport);
+        document.getElementById('import-btn').addEventListener('click', () => document.getElementById('import-file-input').click());
+        document.getElementById('import-file-input').addEventListener('change', handleImport);
+
+        // --- 初期状態の作成 ---
+        function createInitialPatch() {
+            const oscId = createNode('osc', 100, 250);
+            const kaleidId = createNode('kaleid', 350, 250);
+            const outId = createNode('out', 550, 250);
+            connections.push({ from: { nodeId: oscId, outletIndex: 0 }, to: { nodeId: kaleidId, inletIndex: 0 } });
+            connections.push({ from: { nodeId: kaleidId, outletIndex: 0 }, to: { nodeId: outId, inletIndex: 0 } });
+            redrawWires();
+            compileAndRun();
+        }
+        createInitialPatch();
+    });
+    </script>
+</body>
+</html>
