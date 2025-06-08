@@ -171,10 +171,6 @@
                 connections: connections
             };
             const jsonString = JSON.stringify(patchData, null, 2);
-            const blob = new Blob([jsonString], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
 
             // タイムスタンプを生成 (例: 20231027_112233)
             const now = new Date();
@@ -184,12 +180,30 @@
                               String(now.getHours()).padStart(2, '0') +
                               String(now.getMinutes()).padStart(2, '0') +
                               String(now.getSeconds()).padStart(2, '0');
-
-            a.download = `hydra-patch_${timestamp}.json`; // タイムスタンプ付きのファイル名
             
-            a.click();
-            URL.revokeObjectURL(url);
-            a.remove();
+            const filename = `phu_${timestamp}.json`;
+
+            fetch('./save_patch.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ filename: filename, patchData: patchData })
+            })
+            .then(response => response.json()) // Expect a JSON response from save_patch.php
+            .then(data => {
+                if (data && data.status === 'success') {
+                    alert('Patch saved: ' + data.message + '\nURL: ' + data.url);
+                    console.log('Success:', data);
+                } else {
+                    alert('Error saving patch: ' + (data && data.message ? data.message : 'Unknown server error. Check console.'));
+                    console.error('Server error response:', data);
+                }
+            })
+            .catch((error) => {
+                alert('Error sending patch to server: ' + error.message + '. See console for details.');
+                console.error('Fetch Error:', error);
+            });
         }
         
         // (省略: handleImport, loadPatch, clearPatch など、その他の関数は変更ありません)
